@@ -40,8 +40,12 @@ type PluginConfig = {
   groupFieldId: string;
   titleFieldId: string;
   dateFieldId: string;
-  filterFieldId: string;
-  selectedFilterVals: string[];
+
+  filterFieldId1: string;
+  selectedFilterVals1: string[];
+
+  filterFieldId2: string;
+  selectedFilterVals2: string[];
 
   commentTableId: string;
   commentRelationFieldId: string;
@@ -52,7 +56,7 @@ type PluginConfig = {
   commentBlockWidth: number;
 };
 
-const CONFIG_KEY = 'gantt_plugin_config_v1';
+const CONFIG_KEY = 'gantt_plugin_config_v2';
 const AUTO_REFRESH_MS = 4000;
 
 function App() {
@@ -73,9 +77,13 @@ function App() {
   const [titleFieldId, setTitleFieldId] = useState<string>('');
   const [dateFieldId, setDateFieldId] = useState<string>('');
 
-  const [filterFieldId, setFilterFieldId] = useState<string>('');
-  const [filterOptions, setFilterOptions] = useState<string[]>([]);
-  const [selectedFilterVals, setSelectedFilterVals] = useState<string[]>([]);
+  const [filterFieldId1, setFilterFieldId1] = useState<string>('');
+  const [filterOptions1, setFilterOptions1] = useState<string[]>([]);
+  const [selectedFilterVals1, setSelectedFilterVals1] = useState<string[]>([]);
+
+  const [filterFieldId2, setFilterFieldId2] = useState<string>('');
+  const [filterOptions2, setFilterOptions2] = useState<string[]>([]);
+  const [selectedFilterVals2, setSelectedFilterVals2] = useState<string[]>([]);
 
   const [commentTableId, setCommentTableId] = useState<string>('');
   const [commentFields, setCommentFields] = useState<IFieldMeta[]>([]);
@@ -291,6 +299,27 @@ function App() {
     return { table, records: all };
   }, []);
 
+  const recordMatchesOneFilter = useCallback(
+    (record: any, fieldId: string, selectedVals: string[]) => {
+      if (!fieldId || selectedVals.length === 0) return true;
+
+      const recordVal = formatVal(record.fields?.[fieldId]);
+      if (!recordVal) return false;
+
+      return selectedVals.some(v => recordVal.includes(v));
+    },
+    []
+  );
+
+  const recordMatchesFilters = useCallback(
+    (record: any) => {
+      const match1 = recordMatchesOneFilter(record, filterFieldId1, selectedFilterVals1);
+      const match2 = recordMatchesOneFilter(record, filterFieldId2, selectedFilterVals2);
+      return match1 && match2;
+    },
+    [filterFieldId1, selectedFilterVals1, filterFieldId2, selectedFilterVals2, recordMatchesOneFilter]
+  );
+
   const buildDataSignature = useCallback(async () => {
     if (!selectedTableId || !titleFieldId || !dateFieldId) return '';
 
@@ -301,7 +330,8 @@ function App() {
         title: formatVal(record.fields?.[titleFieldId]),
         date: getDateVal(record.fields?.[dateFieldId])?.getTime() || 0,
         group: groupFieldId ? formatVal(record.fields?.[groupFieldId]) : '',
-        filter: filterFieldId ? formatVal(record.fields?.[filterFieldId]) : ''
+        filter1: filterFieldId1 ? formatVal(record.fields?.[filterFieldId1]) : '',
+        filter2: filterFieldId2 ? formatVal(record.fields?.[filterFieldId2]) : ''
       };
     });
 
@@ -320,15 +350,18 @@ function App() {
     return JSON.stringify({
       mainRows,
       commentRows,
-      selectedFilterVals: [...selectedFilterVals].sort()
+      selectedFilterVals1: [...selectedFilterVals1].sort(),
+      selectedFilterVals2: [...selectedFilterVals2].sort()
     });
   }, [
     selectedTableId,
     titleFieldId,
     dateFieldId,
     groupFieldId,
-    filterFieldId,
-    selectedFilterVals,
+    filterFieldId1,
+    selectedFilterVals1,
+    filterFieldId2,
+    selectedFilterVals2,
     commentTableId,
     commentRelationFieldId,
     commentTextFieldId,
@@ -355,14 +388,7 @@ function App() {
         const filteredRecords = records.filter((record: any) => {
           const dateObj = getDateVal(record.fields?.[dateFieldId]);
           if (!dateObj) return false;
-
-          if (filterFieldId && selectedFilterVals.length > 0) {
-            const recordFilterVal = formatVal(record.fields?.[filterFieldId]);
-            const isMatch = selectedFilterVals.some(v => recordFilterVal.includes(v));
-            if (!isMatch) return false;
-          }
-
-          return true;
+          return recordMatchesFilters(record);
         });
 
         const taskMapById = new Map<string, any>();
@@ -629,8 +655,10 @@ function App() {
       titleFieldId,
       dateFieldId,
       groupFieldId,
-      filterFieldId,
-      selectedFilterVals,
+      filterFieldId1,
+      selectedFilterVals1,
+      filterFieldId2,
+      selectedFilterVals2,
       commentTableId,
       commentRelationFieldId,
       commentTextFieldId,
@@ -639,7 +667,8 @@ function App() {
       commentBlockWidth,
       getAllRecords,
       buildDataSignature,
-      isRendering
+      isRendering,
+      recordMatchesFilters
     ]
   );
 
@@ -678,8 +707,13 @@ function App() {
           setGroupFieldId(saved.groupFieldId || '');
           setTitleFieldId(saved.titleFieldId || '');
           setDateFieldId(saved.dateFieldId || '');
-          setFilterFieldId(saved.filterFieldId || '');
-          setSelectedFilterVals(saved.selectedFilterVals || []);
+
+          setFilterFieldId1(saved.filterFieldId1 || '');
+          setSelectedFilterVals1(saved.selectedFilterVals1 || []);
+
+          setFilterFieldId2(saved.filterFieldId2 || '');
+          setSelectedFilterVals2(saved.selectedFilterVals2 || []);
+
           setCommentTableId(saved.commentTableId || '');
           setCommentRelationFieldId(saved.commentRelationFieldId || '');
           setCommentTextFieldId(saved.commentTextFieldId || '');
@@ -707,8 +741,13 @@ function App() {
           groupFieldId,
           titleFieldId,
           dateFieldId,
-          filterFieldId,
-          selectedFilterVals,
+
+          filterFieldId1,
+          selectedFilterVals1,
+
+          filterFieldId2,
+          selectedFilterVals2,
+
           commentTableId,
           commentRelationFieldId,
           commentTextFieldId,
@@ -730,8 +769,10 @@ function App() {
     groupFieldId,
     titleFieldId,
     dateFieldId,
-    filterFieldId,
-    selectedFilterVals,
+    filterFieldId1,
+    selectedFilterVals1,
+    filterFieldId2,
+    selectedFilterVals2,
     commentTableId,
     commentRelationFieldId,
     commentTextFieldId,
@@ -768,42 +809,80 @@ function App() {
     }
   }, [commentTableId]);
 
-  useEffect(() => {
-    const updateOptions = async () => {
-      if (!selectedTableId || !filterFieldId) {
-        setFilterOptions([]);
-        setSelectedFilterVals([]);
+  const loadFilterOptions = useCallback(
+    async (
+      fieldId: string,
+      setOptions: React.Dispatch<React.SetStateAction<string[]>>,
+      setSelected: React.Dispatch<React.SetStateAction<string[]>>
+    ) => {
+      if (!selectedTableId || !fieldId) {
+        setOptions([]);
+        setSelected([]);
         return;
       }
 
       try {
         const table = await bitable.base.getTableById(selectedTableId);
-        const fieldMeta = await table.getFieldMetaById(filterFieldId);
+        const fieldMeta = await table.getFieldMetaById(fieldId);
 
         if (
           fieldMeta.type === FieldType.SingleSelect ||
           fieldMeta.type === FieldType.MultiSelect
         ) {
-          const field = await table.getField<ISingleSelectField | IMultiSelectField>(filterFieldId);
+          const field = await table.getField<ISingleSelectField | IMultiSelectField>(fieldId);
           const options = await field.getOptions();
-          setFilterOptions(options.map(opt => opt.name));
+          setOptions(options.map(opt => opt.name));
         } else {
           const { records } = await getAllRecords(selectedTableId);
           const values = new Set<string>();
+
           records.forEach((r: any) => {
-            const val = formatVal(r.fields?.[filterFieldId]);
-            if (val) values.add(val);
+            const rawVal = r.fields?.[fieldId];
+            if (Array.isArray(rawVal)) {
+              rawVal.forEach(item => {
+                const v =
+                  typeof item === 'string' || typeof item === 'number'
+                    ? String(item)
+                    : item?.name || item?.text || item?.title || item?.label || item?.value || '';
+                if (v) values.add(v);
+              });
+            } else {
+              const val = formatVal(rawVal);
+              if (val) {
+                val
+                  .split(',')
+                  .map(x => x.trim())
+                  .filter(Boolean)
+                  .forEach(x => values.add(x));
+              }
+            }
           });
-          setFilterOptions(Array.from(values));
+
+          setOptions(Array.from(values));
         }
       } catch (e) {
         console.error('读取筛选项失败', e);
-        setFilterOptions([]);
+        setOptions([]);
       }
-    };
+    },
+    [selectedTableId, getAllRecords]
+  );
 
-    updateOptions();
-  }, [filterFieldId, selectedTableId, getAllRecords]);
+  useEffect(() => {
+    loadFilterOptions(filterFieldId1, setFilterOptions1, setSelectedFilterVals1);
+  }, [filterFieldId1, loadFilterOptions]);
+
+  useEffect(() => {
+    loadFilterOptions(filterFieldId2, setFilterOptions2, setSelectedFilterVals2);
+  }, [filterFieldId2, loadFilterOptions]);
+
+  useEffect(() => {
+    if (filterFieldId1 && filterFieldId2 && filterFieldId1 === filterFieldId2) {
+      setFilterFieldId2('');
+      setFilterOptions2([]);
+      setSelectedFilterVals2([]);
+    }
+  }, [filterFieldId1, filterFieldId2]);
 
   useEffect(() => {
     const onResize = () => {
@@ -851,6 +930,20 @@ function App() {
   const handleManualRender = async () => {
     await renderTimeline(true);
     startAutoRefresh();
+  };
+
+  const toggleSelectedValue = (
+    checked: boolean,
+    value: string,
+    setState: React.Dispatch<React.SetStateAction<string[]>>
+  ) => {
+    setState(prev => {
+      if (checked) {
+        if (prev.includes(value)) return prev;
+        return [...prev, value];
+      }
+      return prev.filter(v => v !== value);
+    });
   };
 
   return (
@@ -1033,13 +1126,14 @@ function App() {
         }
 
         .canvas-toolbar {
-          height: 54px;
+          min-height: 54px;
           display: flex;
-          align-items: center;
+          align-items: flex-start;
           justify-content: space-between;
-          padding: 0 18px;
+          padding: 12px 18px;
           border-bottom: 1px solid #f0f1f3;
           background: #fff;
+          gap: 16px;
         }
 
         .canvas-title {
@@ -1051,6 +1145,8 @@ function App() {
         .toolbar-status {
           font-size: 12px;
           color: #86909c;
+          white-space: nowrap;
+          padding-top: 4px;
         }
 
         .filter-badges {
@@ -1275,6 +1371,7 @@ function App() {
           font-size: 12px;
           color: #86909c;
           margin-top: 4px;
+          line-height: 1.6;
         }
       `}</style>
 
@@ -1283,16 +1380,23 @@ function App() {
           <div className="canvas-toolbar">
             <div>
               <div className="canvas-title">进程图</div>
-              {selectedFilterVals.length > 0 && (
+
+              {(selectedFilterVals1.length > 0 || selectedFilterVals2.length > 0) && (
                 <div className="filter-badges">
-                  {selectedFilterVals.map(v => (
-                    <span key={v} className="filter-badge">
-                      {v}
+                  {selectedFilterVals1.map(v => (
+                    <span key={`f1_${v}`} className="filter-badge">
+                      条件1：{v}
+                    </span>
+                  ))}
+                  {selectedFilterVals2.map(v => (
+                    <span key={`f2_${v}`} className="filter-badge">
+                      条件2：{v}
                     </span>
                   ))}
                 </div>
               )}
             </div>
+
             <div className="toolbar-status">
               {isRendering
                 ? '正在更新…'
@@ -1450,40 +1554,38 @@ function App() {
           </div>
 
           <div className="config-section">
-            <div className="section-title">筛选</div>
+            <div className="section-title">筛选条件 1</div>
 
             <div className="field-row">
               <label className="field-label">筛选字段</label>
               <select
                 className="lark-select"
-                value={filterFieldId}
-                onChange={e => setFilterFieldId(e.target.value)}
+                value={filterFieldId1}
+                onChange={e => setFilterFieldId1(e.target.value)}
               >
                 <option value="">不使用筛选</option>
                 {fields.map(f => (
-                  <option key={f.id} value={f.id}>
+                  <option
+                    key={f.id}
+                    value={f.id}
+                    disabled={filterFieldId2 === f.id}
+                  >
                     {f.name}
                   </option>
                 ))}
               </select>
             </div>
 
-            {filterOptions.length > 0 && (
+            {filterOptions1.length > 0 && (
               <div className="field-row">
                 <label className="field-label">可见记录</label>
                 <div className="checkbox-grid">
-                  {filterOptions.map(opt => (
+                  {filterOptions1.map(opt => (
                     <label key={opt} className="checkbox-item">
                       <input
                         type="checkbox"
-                        checked={selectedFilterVals.includes(opt)}
-                        onChange={e => {
-                          if (e.target.checked) {
-                            setSelectedFilterVals(prev => [...prev, opt]);
-                          } else {
-                            setSelectedFilterVals(prev => prev.filter(v => v !== opt));
-                          }
-                        }}
+                        checked={selectedFilterVals1.includes(opt)}
+                        onChange={e => toggleSelectedValue(e.target.checked, opt, setSelectedFilterVals1)}
                       />
                       {opt}
                     </label>
@@ -1491,6 +1593,52 @@ function App() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="config-section">
+            <div className="section-title">筛选条件 2</div>
+
+            <div className="field-row">
+              <label className="field-label">筛选字段</label>
+              <select
+                className="lark-select"
+                value={filterFieldId2}
+                onChange={e => setFilterFieldId2(e.target.value)}
+              >
+                <option value="">不使用筛选</option>
+                {fields.map(f => (
+                  <option
+                    key={f.id}
+                    value={f.id}
+                    disabled={filterFieldId1 === f.id}
+                  >
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {filterOptions2.length > 0 && (
+              <div className="field-row">
+                <label className="field-label">可见记录</label>
+                <div className="checkbox-grid">
+                  {filterOptions2.map(opt => (
+                    <label key={opt} className="checkbox-item">
+                      <input
+                        type="checkbox"
+                        checked={selectedFilterVals2.includes(opt)}
+                        onChange={e => toggleSelectedValue(e.target.checked, opt, setSelectedFilterVals2)}
+                      />
+                      {opt}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="sub-tip">
+              同一条件内多选为“或”；两个条件之间为“且”。
+            </div>
           </div>
 
           <div className="config-section">
@@ -1596,8 +1744,7 @@ function App() {
               </div>
             </div>
 
-            <div className="sub-tip">
-            </div>
+            <div className="sub-tip"></div>
           </div>
 
           <button className="generate-btn" onClick={handleManualRender} disabled={isRendering}>
