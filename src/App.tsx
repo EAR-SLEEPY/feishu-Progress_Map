@@ -22,7 +22,12 @@ type CommentLine = {
 type OverlayBlock = {
   taskId: string;
   left: number;
-  html: string;
+  comments: CommentLine[];
+};
+
+type CommentDateGroup = {
+  dateText: string;
+  comments: CommentLine[];
 };
 
 type AxisAnchor = {
@@ -72,6 +77,7 @@ function App() {
   const autoRefreshTimerRef = useRef<number | null>(null);
   const lastDataSignatureRef = useRef<string>('');
   const isPageVisibleRef = useRef<boolean>(true);
+  const expandedCommentTaskIdsRef = useRef<Set<string>>(new Set());
 
   const [tables, setTables] = useState<ITableMeta[]>([]);
   const [selectedTableId, setSelectedTableId] = useState<string>('');
@@ -97,6 +103,9 @@ function App() {
 
   const [overlayBlocks, setOverlayBlocks] = useState<OverlayBlock[]>([]);
   const [overlayHeight, setOverlayHeight] = useState<number>(320);
+  const [expandedCommentTaskIds, setExpandedCommentTaskIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const [axisAnchors, setAxisAnchors] = useState<AxisAnchor[]>([]);
   const [taskDecorations, setTaskDecorations] = useState<TaskDecoration[]>([]);
@@ -192,13 +201,26 @@ function App() {
     return `${y}-${m}-${d}`;
   };
 
-  const escapeHtml = (str: string) => {
-    return String(str)
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
+  const groupCommentsByDate = (comments: CommentLine[]): CommentDateGroup[] => {
+    const groups: CommentDateGroup[] = [];
+
+    comments.forEach(comment => {
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup?.dateText === comment.dateText) {
+        lastGroup.comments.push(comment);
+      } else {
+        groups.push({ dateText: comment.dateText, comments: [comment] });
+      }
+    });
+
+    return groups;
+  };
+
+  const getVisibleComments = (comments: CommentLine[], expanded: boolean) => {
+    if (expanded) return comments;
+    return groupCommentsByDate(comments)
+      .slice(0, 3)
+      .flatMap(group => group.comments);
   };
 
   const extractLinkedRecordIds = (val: any): string[] => {
@@ -266,7 +288,7 @@ function App() {
       if (currentHeight > maxHeight) maxHeight = currentHeight;
     });
 
-    return Math.min(Math.max(maxHeight, 250), 1200);
+    return Math.max(maxHeight, 250);
   };
 
   const createTaskNode = (label: string, taskId: string, dateKey: string) => {
@@ -502,7 +524,7 @@ function App() {
             if (!task?.start) return null;
 
             const comments = (commentMap.get(record.recordId) || []).sort(
-              (a, b) => a.sortTime - b.sortTime
+              (a, b) => b.sortTime - a.sortTime
             );
             if (!comments.length) return null;
 
@@ -515,7 +537,16 @@ function App() {
           })
           .filter(Boolean) as Array<{ taskId: string; start: Date; dateKey: string; comments: CommentLine[] }>;
 
-        setOverlayHeight(estimateOverlayHeight(overlayTaskData));
+        setOverlayHeight(
+          estimateOverlayHeight(
+            overlayTaskData.map(item => ({
+              comments: getVisibleComments(
+                item.comments,
+                expandedCommentTaskIdsRef.current.has(item.taskId)
+              )
+            }))
+          )
+        );
         setIsConfigured(true);
 
         setTimeout(() => {
@@ -613,30 +644,24 @@ function App() {
               const x = getTimelineScreenX(timeline, item.start);
               const left = x;
 
-              const html = `
-                <div class="axis-comment-card">
-                  ${item.comments
-                    .map(c => {
-                      return `
-                        <div class="axis-comment-line">
-                          <span class="axis-comment-date">${escapeHtml(c.dateText)}：</span>
-                          <span class="axis-comment-text">${escapeHtml(c.commentText)}</span>
-                        </div>
-                      `;
-                    })
-                    .join('')}
-                </div>
-              `;
-
               return {
                 taskId: item.taskId,
                 left,
-                html
+                comments: item.comments
               };
             });
 
             setOverlayBlocks(blocks);
-            setOverlayHeight(estimateOverlayHeight(overlayTaskData));
+            setOverlayHeight(
+              estimateOverlayHeight(
+                overlayTaskData.map(item => ({
+                  comments: getVisibleComments(
+                    item.comments,
+                    expandedCommentTaskIdsRef.current.has(item.taskId)
+                  )
+                }))
+              )
+            );
           };
 
           timelineHandlersRef.current.redrawDecorations = redrawDecorations;
@@ -925,6 +950,22 @@ function App() {
   }, [commentFontSize, commentBlockWidth, isConfigured]);
 
   useEffect(() => {
+    expandedCommentTaskIdsRef.current = expandedCommentTaskIds;
+    if (!overlayBlocks.length) return;
+
+    setOverlayHeight(
+      estimateOverlayHeight(
+        overlayBlocks.map(block => ({
+          comments: getVisibleComments(
+            block.comments,
+            expandedCommentTaskIds.has(block.taskId)
+          )
+        }))
+      )
+    );
+  }, [expandedCommentTaskIds, overlayBlocks, commentFontSize, commentBlockWidth]);
+
+  useEffect(() => {
     const onVisibilityChange = () => {
       isPageVisibleRef.current = !document.hidden;
     };
@@ -1003,6 +1044,19 @@ function App() {
         return [...prev, value];
       }
       return prev.filter(v => v !== value);
+    });
+  };
+
+  const toggleTaskComments = (taskId: string) => {
+    setExpandedCommentTaskIds(previous => {
+      const next = new Set(previous);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      expandedCommentTaskIdsRef.current = next;
+      return next;
     });
   };
 
@@ -1282,7 +1336,7 @@ function App() {
           inset: 0;
           pointer-events: none;
           overflow: visible;
-          z-index: 3;
+          z-index: 1;
         }
 
         .task-decoration-line {
@@ -1298,7 +1352,7 @@ function App() {
           inset: 0;
           pointer-events: none;
           overflow: visible;
-          z-index: 4;
+          z-index: 2;
         }
 
         .axis-anchor-dot {
@@ -1353,20 +1407,26 @@ function App() {
           padding: 10px 12px;
         }
 
-        .axis-comment-line {
-          margin-bottom: 6px;
-          white-space: normal;
-          word-break: break-word;
-          overflow-wrap: anywhere;
+        .axis-comment-date-group {
+          display: grid;
+          grid-template-columns: 82px minmax(0, 1fr);
+          gap: 10px;
+          padding: 8px 0;
+          border-bottom: 1px solid #f0f1f3;
         }
 
-        .axis-comment-line:last-child {
-          margin-bottom: 0;
+        .axis-comment-date-group:first-child {
+          padding-top: 0;
+        }
+
+        .axis-comment-date-group:last-of-type {
+          border-bottom: none;
         }
 
         .axis-comment-date {
           color: #3370ff;
           font-weight: 600;
+          white-space: nowrap;
         }
 
         .axis-comment-text {
@@ -1374,6 +1434,27 @@ function App() {
           white-space: pre-line;
           word-break: break-word;
           overflow-wrap: anywhere;
+        }
+
+        .axis-comment-text + .axis-comment-text {
+          margin-top: 6px;
+        }
+
+        .comment-toggle {
+          display: block;
+          margin: 8px auto 0;
+          padding: 4px 8px;
+          color: #3370ff;
+          background: transparent;
+          border: none;
+          border-radius: 4px;
+          font-size: 12px;
+          cursor: pointer;
+          pointer-events: auto;
+        }
+
+        .comment-toggle:hover {
+          background: #edf3ff;
         }
 
         .vis-timeline {
@@ -1417,7 +1498,7 @@ function App() {
           box-shadow: none !important;
           padding: 0 !important;
           overflow: visible !important;
-          z-index: 10 !important;
+          z-index: 30 !important;
         }
 
         .vis-item.lark-item .vis-item-overflow {
@@ -1454,7 +1535,8 @@ function App() {
           line-height: 1;
           white-space: nowrap;
           position: relative;
-          z-index: 11;
+          z-index: 50;
+          isolation: isolate;
           box-shadow: 0 0 0 3px #ffffff;
         }
 
@@ -1516,19 +1598,60 @@ function App() {
                   className="timeline-overlay"
                   style={{ height: `${overlayHeight}px` }}
                 >
-                  {overlayBlocks.map(block => (
-                    <div
-                      key={block.taskId}
-                      className="axis-comment-block"
-                      style={{
-                        left: `${block.left}px`,
-                        width: `${commentBlockWidth}px`,
-                        fontSize: `${commentFontSize}px`,
-                        lineHeight: `${Math.round(commentFontSize * 1.55)}px`
-                      }}
-                      dangerouslySetInnerHTML={{ __html: block.html }}
-                    />
-                  ))}
+                  {overlayBlocks.map(block => {
+                    const allDateGroups = groupCommentsByDate(block.comments);
+                    const isExpanded = expandedCommentTaskIds.has(block.taskId);
+                    const visibleDateGroups = isExpanded
+                      ? allDateGroups
+                      : allDateGroups.slice(0, 3);
+
+                    return (
+                      <div
+                        key={block.taskId}
+                        className="axis-comment-block"
+                        style={{
+                          left: `${block.left}px`,
+                          width: `${commentBlockWidth}px`,
+                          fontSize: `${commentFontSize}px`,
+                          lineHeight: `${Math.round(commentFontSize * 1.55)}px`
+                        }}
+                      >
+                        <div className="axis-comment-card">
+                          {visibleDateGroups.map(group => (
+                            <div key={group.dateText} className="axis-comment-date-group">
+                              <div className="axis-comment-date">{group.dateText}</div>
+                              <div>
+                                {group.comments.map((comment, commentIndex) => (
+                                  <div
+                                    key={`${comment.sortTime}_${commentIndex}`}
+                                    className="axis-comment-text"
+                                  >
+                                    {comment.commentText}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+
+                          {allDateGroups.length > 3 && (
+                            <button
+                              type="button"
+                              className="comment-toggle"
+                              aria-expanded={isExpanded}
+                              onClick={event => {
+                                event.stopPropagation();
+                                toggleTaskComments(block.taskId);
+                              }}
+                            >
+                              {isExpanded
+                                ? '收起评论'
+                                : `展开全部（共 ${allDateGroups.length} 个日期）`}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : (
