@@ -39,8 +39,10 @@ type AxisAnchor = {
 type TaskDecoration = {
   taskId: string;
   left: number;
-  top: number;
-  height: number;
+  segments: Array<{
+    top: number;
+    height: number;
+  }>;
 };
 
 type PluginConfig = {
@@ -106,6 +108,7 @@ function App() {
   const [expandedCommentTaskIds, setExpandedCommentTaskIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [focusedCommentTaskId, setFocusedCommentTaskId] = useState<string>('');
 
   const [axisAnchors, setAxisAnchors] = useState<AxisAnchor[]>([]);
   const [taskDecorations, setTaskDecorations] = useState<TaskDecoration[]>([]);
@@ -252,6 +255,9 @@ function App() {
     }
     if (timelineHandlersRef.current.changed) {
       timeline.off('changed', timelineHandlersRef.current.changed);
+    }
+    if (timelineHandlersRef.current.select) {
+      timeline.off('select', timelineHandlersRef.current.select);
     }
 
     timelineHandlersRef.current = {};
@@ -612,6 +618,18 @@ function App() {
               containerRef.current.querySelectorAll('.vis-item.lark-item .task-node')
             ) as HTMLElement[];
 
+            // 每条任务竖线在经过其他任务卡片时主动断开，避免连接线覆盖文字。
+            // 仅靠 z-index 无法可靠处理 vis-timeline 内部的多层 stacking context。
+            const labelObstacles = items
+              .map(node => node.querySelector('.task-node-label')?.getBoundingClientRect())
+              .filter(Boolean)
+              .map(rect => ({
+                left: (rect as DOMRect).left - wrapperRect.left - 5,
+                right: (rect as DOMRect).right - wrapperRect.left + 5,
+                top: (rect as DOMRect).top - wrapperRect.top - 5,
+                bottom: (rect as DOMRect).bottom - wrapperRect.top + 5
+              }));
+
             const decorations: TaskDecoration[] = items
               .map(node => {
                 const taskId = node.getAttribute('data-task-id') || '';
@@ -627,16 +645,50 @@ function App() {
 
                 const left = nodeRect.left - wrapperRect.left + nodeRect.width / 2;
                 const top = labelRect.bottom - wrapperRect.top + 6;
-                const height = Math.max(8, matchedAnchor.top - top);
+                const bottom = matchedAnchor.top;
+                if (bottom <= top) return null;
+
+                const blockingRanges = labelObstacles
+                  .filter(obstacle => left >= obstacle.left && left <= obstacle.right)
+                  .map(obstacle => ({
+                    top: Math.max(top, obstacle.top),
+                    bottom: Math.min(bottom, obstacle.bottom)
+                  }))
+                  .filter(range => range.bottom > range.top)
+                  .sort((a, b) => a.top - b.top);
+
+                const mergedRanges = blockingRanges.reduce<Array<{ top: number; bottom: number }>>(
+                  (ranges, range) => {
+                    const previous = ranges[ranges.length - 1];
+                    if (previous && range.top <= previous.bottom) {
+                      previous.bottom = Math.max(previous.bottom, range.bottom);
+                    } else {
+                      ranges.push({ ...range });
+                    }
+                    return ranges;
+                  },
+                  []
+                );
+
+                const segments: Array<{ top: number; height: number }> = [];
+                let cursor = top;
+                mergedRanges.forEach(range => {
+                  if (range.top - cursor >= 3) {
+                    segments.push({ top: cursor, height: range.top - cursor });
+                  }
+                  cursor = Math.max(cursor, range.bottom);
+                });
+                if (bottom - cursor >= 3) {
+                  segments.push({ top: cursor, height: bottom - cursor });
+                }
 
                 return {
                   taskId,
                   left,
-                  top,
-                  height
+                  segments
                 };
               })
-              .filter(Boolean) as TaskDecoration[];
+              .filter(item => item?.segments.length) as TaskDecoration[];
 
             setTaskDecorations(decorations);
 
@@ -667,9 +719,16 @@ function App() {
           timelineHandlersRef.current.redrawDecorations = redrawDecorations;
           timelineHandlersRef.current.rangechanged = () => redrawDecorations();
           timelineHandlersRef.current.changed = () => redrawDecorations();
+          timelineHandlersRef.current.select = (properties: { items?: Array<string | number> }) => {
+            const selectedItemId = String(properties.items?.[0] || '');
+            if (selectedItemId.startsWith('task_')) {
+              setFocusedCommentTaskId(selectedItemId.slice('task_'.length));
+            }
+          };
 
           timeline.on('rangechanged', timelineHandlersRef.current.rangechanged);
           timeline.on('changed', timelineHandlersRef.current.changed);
+          timeline.on('select', timelineHandlersRef.current.select);
 
           redrawDecorations();
           if (!isConfigMode) {
@@ -1341,8 +1400,8 @@ function App() {
 
         .task-decoration-line {
           position: absolute;
-          width: 2px;
-          background: #3370ff;
+          width: 1px;
+          background: rgba(51,112,255,0.72);
           border-radius: 999px;
           transform: translateX(-50%);
         }
@@ -1384,6 +1443,7 @@ function App() {
           white-space: normal;
           word-break: break-word;
           overflow-wrap: anywhere;
+          z-index: 1;
         }
 
         .axis-comment-block::before {
@@ -1400,11 +1460,20 @@ function App() {
         }
 
         .axis-comment-card {
+          position: relative;
           background: #ffffff;
           border: 1px solid #e5e6eb;
           border-radius: 12px;
           box-shadow: 0 4px 14px rgba(31,35,41,0.06);
           padding: 10px 12px;
+          cursor: pointer;
+          pointer-events: auto;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .axis-comment-block.is-focused .axis-comment-card {
+          border-color: #81a9ff;
+          box-shadow: 0 8px 24px rgba(51,112,255,0.18);
         }
 
         .axis-comment-date-group {
@@ -1568,15 +1637,19 @@ function App() {
 
                 <div className="task-decoration-layer">
                   {taskDecorations.map(item => (
-                    <div
-                      key={item.taskId}
-                      className="task-decoration-line"
-                      style={{
-                        left: `${item.left}px`,
-                        top: `${item.top}px`,
-                        height: `${item.height}px`
-                      }}
-                    />
+                    <React.Fragment key={item.taskId}>
+                      {item.segments.map((segment, segmentIndex) => (
+                        <div
+                          key={`${item.taskId}_${segmentIndex}`}
+                          className="task-decoration-line"
+                          style={{
+                            left: `${item.left}px`,
+                            top: `${segment.top}px`,
+                            height: `${segment.height}px`
+                          }}
+                        />
+                      ))}
+                    </React.Fragment>
                   ))}
                 </div>
 
@@ -1601,6 +1674,7 @@ function App() {
                   {overlayBlocks.map(block => {
                     const allDateGroups = groupCommentsByDate(block.comments);
                     const isExpanded = expandedCommentTaskIds.has(block.taskId);
+                    const isFocused = focusedCommentTaskId === block.taskId;
                     const visibleDateGroups = isExpanded
                       ? allDateGroups
                       : allDateGroups.slice(0, 3);
@@ -1608,15 +1682,20 @@ function App() {
                     return (
                       <div
                         key={block.taskId}
-                        className="axis-comment-block"
+                        className={`axis-comment-block${isFocused ? ' is-focused' : ''}`}
                         style={{
                           left: `${block.left}px`,
                           width: `${commentBlockWidth}px`,
                           fontSize: `${commentFontSize}px`,
-                          lineHeight: `${Math.round(commentFontSize * 1.55)}px`
+                          lineHeight: `${Math.round(commentFontSize * 1.55)}px`,
+                          zIndex: isFocused ? 1000 : 1
                         }}
                       >
-                        <div className="axis-comment-card">
+                        <div
+                          className="axis-comment-card"
+                          title="点击将此任务评论置于最上层"
+                          onPointerDown={() => setFocusedCommentTaskId(block.taskId)}
+                        >
                           {visibleDateGroups.map(group => (
                             <div key={group.dateText} className="axis-comment-date-group">
                               <div className="axis-comment-date">{group.dateText}</div>
