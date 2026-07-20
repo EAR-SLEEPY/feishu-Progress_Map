@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   bitable,
+  dashboard,
+  DashboardState,
   FieldType,
+  IConfig,
   IFieldMeta,
   ITableMeta,
   ISingleSelectField,
@@ -56,10 +59,11 @@ type PluginConfig = {
   commentBlockWidth: number;
 };
 
-const CONFIG_KEY = 'gantt_plugin_config_v2';
 const AUTO_REFRESH_MS = 4000;
 
 function App() {
+  const isConfigMode =
+    dashboard.state === DashboardState.Create || dashboard.state === DashboardState.Config;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -102,7 +106,10 @@ function App() {
 
   const [isConfigured, setIsConfigured] = useState<boolean>(false);
   const [isRendering, setIsRendering] = useState<boolean>(false);
+  const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
   const [isConfigLoaded, setIsConfigLoaded] = useState<boolean>(false);
+  const [appliedConfigVersion, setAppliedConfigVersion] = useState<number>(0);
+  const [configError, setConfigError] = useState<string>('');
 
   const formatVal = (val: any) => {
     if (val === null || val === undefined) return '';
@@ -640,12 +647,16 @@ function App() {
           timeline.on('changed', timelineHandlersRef.current.changed);
 
           redrawDecorations();
+          window.requestAnimationFrame(() => {
+            dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
+          });
         }, 50);
 
         lastDataSignatureRef.current = currentSignature;
+        setConfigError('');
       } catch (err) {
         console.error(err);
-        alert(`生成失败：${err instanceof Error ? err.message : String(err)}`);
+        setConfigError(`生成失败：${err instanceof Error ? err.message : String(err)}`);
       } finally {
         setIsRendering(false);
       }
@@ -698,88 +709,55 @@ function App() {
     bitable.base.getTableMetaList().then(setTables);
   }, []);
 
+  const applyDashboardConfig = useCallback((dashboardConfig?: IConfig) => {
+    const saved = dashboardConfig?.customConfig as Partial<PluginConfig> | undefined;
+    if (!saved) return false;
+
+    setSelectedTableId(saved.selectedTableId || '');
+    setGroupFieldId(saved.groupFieldId || '');
+    setTitleFieldId(saved.titleFieldId || '');
+    setDateFieldId(saved.dateFieldId || '');
+
+    setFilterFieldId1(saved.filterFieldId1 || '');
+    setSelectedFilterVals1(saved.selectedFilterVals1 || []);
+
+    setFilterFieldId2(saved.filterFieldId2 || '');
+    setSelectedFilterVals2(saved.selectedFilterVals2 || []);
+
+    setCommentTableId(saved.commentTableId || '');
+    setCommentRelationFieldId(saved.commentRelationFieldId || '');
+    setCommentTextFieldId(saved.commentTextFieldId || '');
+    setCommentDateFieldId(saved.commentDateFieldId || '');
+    setCommentFontSize(saved.commentFontSize ?? 13);
+    setCommentBlockWidth(saved.commentBlockWidth ?? 420);
+    setAppliedConfigVersion(version => version + 1);
+    return true;
+  }, []);
+
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        const saved = await bitable.bridge.getData<Partial<PluginConfig>>(CONFIG_KEY);
-        if (saved) {
-          setSelectedTableId(saved.selectedTableId || '');
-          setGroupFieldId(saved.groupFieldId || '');
-          setTitleFieldId(saved.titleFieldId || '');
-          setDateFieldId(saved.dateFieldId || '');
-
-          setFilterFieldId1(saved.filterFieldId1 || '');
-          setSelectedFilterVals1(saved.selectedFilterVals1 || []);
-
-          setFilterFieldId2(saved.filterFieldId2 || '');
-          setSelectedFilterVals2(saved.selectedFilterVals2 || []);
-
-          setCommentTableId(saved.commentTableId || '');
-          setCommentRelationFieldId(saved.commentRelationFieldId || '');
-          setCommentTextFieldId(saved.commentTextFieldId || '');
-          setCommentDateFieldId(saved.commentDateFieldId || '');
-          setCommentFontSize(saved.commentFontSize ?? 13);
-          setCommentBlockWidth(saved.commentBlockWidth ?? 420);
+        if (dashboard.state !== DashboardState.Create) {
+          applyDashboardConfig(await dashboard.getConfig());
         }
       } catch (e) {
         console.error('读取配置失败', e);
+        setConfigError('读取已保存配置失败，请重新打开配置面板后再试。');
       } finally {
         setIsConfigLoaded(true);
       }
     };
 
     loadConfig();
-  }, []);
 
-  useEffect(() => {
-    if (!isConfigLoaded) return;
+    const offConfigChange = dashboard.onConfigChange(event => {
+      setConfigError('');
+      applyDashboardConfig(event.data);
+      setIsConfigLoaded(true);
+    });
 
-    const saveConfig = async () => {
-      try {
-        const config: PluginConfig = {
-          selectedTableId,
-          groupFieldId,
-          titleFieldId,
-          dateFieldId,
-
-          filterFieldId1,
-          selectedFilterVals1,
-
-          filterFieldId2,
-          selectedFilterVals2,
-
-          commentTableId,
-          commentRelationFieldId,
-          commentTextFieldId,
-          commentDateFieldId,
-          commentFontSize,
-          commentBlockWidth
-        };
-
-        await bitable.bridge.setData(CONFIG_KEY, config);
-      } catch (e) {
-        console.error('保存配置失败', e);
-      }
-    };
-
-    saveConfig();
-  }, [
-    isConfigLoaded,
-    selectedTableId,
-    groupFieldId,
-    titleFieldId,
-    dateFieldId,
-    filterFieldId1,
-    selectedFilterVals1,
-    filterFieldId2,
-    selectedFilterVals2,
-    commentTableId,
-    commentRelationFieldId,
-    commentTextFieldId,
-    commentDateFieldId,
-    commentFontSize,
-    commentBlockWidth
-  ]);
+    return () => offConfigChange();
+  }, [applyDashboardConfig]);
 
   useEffect(() => {
     if (selectedTableId) {
@@ -885,6 +863,19 @@ function App() {
   }, [filterFieldId1, filterFieldId2]);
 
   useEffect(() => {
+    if (!isConfigLoaded) return;
+
+    if (!selectedTableId || !titleFieldId || !dateFieldId) {
+      dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
+      return;
+    }
+
+    renderTimeline(true);
+    // 这里只响应飞书下发的已保存配置版本；右侧尚未确认的草稿不会改动仪表盘视图。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedConfigVersion, isConfigLoaded]);
+
+  useEffect(() => {
     const onResize = () => {
       if (timelineRef.current && timelineHandlersRef.current.redrawDecorations) {
         timelineHandlersRef.current.redrawDecorations();
@@ -928,8 +919,49 @@ function App() {
   }, [stopAutoRefresh]);
 
   const handleManualRender = async () => {
-    await renderTimeline(true);
-    startAutoRefresh();
+    if (!selectedTableId || !titleFieldId || !dateFieldId) {
+      setConfigError('请先选择数据表、任务标题和日期字段。');
+      return;
+    }
+
+    const config: PluginConfig = {
+      selectedTableId,
+      groupFieldId,
+      titleFieldId,
+      dateFieldId,
+      filterFieldId1,
+      selectedFilterVals1,
+      filterFieldId2,
+      selectedFilterVals2,
+      commentTableId,
+      commentRelationFieldId,
+      commentTextFieldId,
+      commentDateFieldId,
+      commentFontSize,
+      commentBlockWidth
+    };
+
+    try {
+      setIsSavingConfig(true);
+      setConfigError('');
+      await dashboard.saveConfig({
+        dataConditions: [
+          {
+            tableId: selectedTableId,
+            groups: [],
+            series: 'COUNTA'
+          }
+        ],
+        customConfig: config
+      });
+      await renderTimeline(true);
+      startAutoRefresh();
+    } catch (err) {
+      console.error('保存配置失败', err);
+      setConfigError(`保存配置失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSavingConfig(false);
+    }
   };
 
   const toggleSelectedValue = (
@@ -947,7 +979,7 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isConfigMode ? 'config-mode' : 'view-mode'}`}>
       <style>{`
         * {
           box-sizing: border-box;
@@ -975,6 +1007,10 @@ function App() {
           padding: 16px;
         }
 
+        .app-shell.view-mode .main-panel {
+          padding: 0;
+        }
+
         .side-panel {
           width: 320px;
           background: #fff;
@@ -985,15 +1021,21 @@ function App() {
         }
 
         .side-header {
-          padding: 18px 20px 10px;
+          padding: 18px 20px 16px;
           border-bottom: 1px solid #f0f1f3;
         }
 
         .side-title {
-          font-size: 20px;
+          font-size: 17px;
           font-weight: 600;
           color: #1f2329;
-          margin-bottom: 10px;
+          margin-bottom: 6px;
+        }
+
+        .side-description {
+          color: #86909c;
+          font-size: 12px;
+          line-height: 1.55;
         }
 
         .side-tabs {
@@ -1118,11 +1160,28 @@ function App() {
           cursor: not-allowed;
         }
 
+        .config-error {
+          margin: 0 0 12px;
+          padding: 9px 10px;
+          color: #d83931;
+          background: #fef1f1;
+          border: 1px solid #fde2e2;
+          border-radius: 6px;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
         .canvas-card {
           background: #fff;
           border: 1px solid #e5e6eb;
           border-radius: 12px;
           overflow: hidden;
+        }
+
+        .app-shell.view-mode .canvas-card {
+          border: none;
+          border-radius: 0;
+          min-height: 100vh;
         }
 
         .canvas-toolbar {
@@ -1168,6 +1227,42 @@ function App() {
         .timeline-stage {
           padding: 16px;
           background: #fff;
+        }
+
+        .empty-state {
+          min-height: 420px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          color: #86909c;
+          padding: 40px;
+        }
+
+        .empty-state-icon {
+          width: 44px;
+          height: 44px;
+          display: grid;
+          place-items: center;
+          margin-bottom: 14px;
+          border-radius: 12px;
+          color: #3370ff;
+          background: #edf3ff;
+          font-size: 22px;
+        }
+
+        .empty-state-title {
+          color: #1f2329;
+          font-size: 15px;
+          font-weight: 600;
+          margin-bottom: 6px;
+        }
+
+        .empty-state-description {
+          max-width: 360px;
+          font-size: 13px;
+          line-height: 1.6;
         }
 
         .timeline-wrapper {
@@ -1398,80 +1493,99 @@ function App() {
             </div>
 
             <div className="toolbar-status">
-              {isRendering
+              {!isConfigLoaded
+                ? '正在读取配置…'
+                : isRendering
                 ? '正在更新…'
                 : isConfigured
                 ? `已开启自动同步（每 ${AUTO_REFRESH_MS / 1000} 秒检查一次）`
-                : '请先在右侧完成配置'}
+                : isConfigMode
+                ? '请在右侧完成配置'
+                : '尚未配置'}
             </div>
           </div>
 
           <div className="timeline-stage">
-            <div
-              ref={wrapperRef}
-              className="timeline-wrapper"
-              style={{ paddingBottom: `${overlayHeight}px` }}
-            >
-              <div ref={containerRef} />
-
-              <div className="task-decoration-layer">
-                {taskDecorations.map(item => (
-                  <div
-                    key={item.taskId}
-                    className="task-decoration-line"
-                    style={{
-                      left: `${item.left}px`,
-                      top: `${item.top}px`,
-                      height: `${item.height}px`
-                    }}
-                  />
-                ))}
-              </div>
-
-              <div className="axis-anchor-layer">
-                {axisAnchors.map(anchor => (
-                  <div
-                    key={anchor.dateKey}
-                    className="axis-anchor-dot"
-                    style={{
-                      left: `${anchor.left}px`,
-                      top: `${anchor.top}px`
-                    }}
-                  />
-                ))}
-              </div>
-
+            {isConfigured ? (
               <div
-                ref={overlayRef}
-                className="timeline-overlay"
-                style={{ height: `${overlayHeight}px` }}
+                ref={wrapperRef}
+                className="timeline-wrapper"
+                style={{ paddingBottom: `${overlayHeight}px` }}
               >
-                {overlayBlocks.map(block => (
-                  <div
-                    key={block.taskId}
-                    className="axis-comment-block"
-                    style={{
-                      left: `${block.left}px`,
-                      width: `${commentBlockWidth}px`,
-                      fontSize: `${commentFontSize}px`,
-                      lineHeight: `${Math.round(commentFontSize * 1.55)}px`
-                    }}
-                    dangerouslySetInnerHTML={{ __html: block.html }}
-                  />
-                ))}
+                <div ref={containerRef} />
+
+                <div className="task-decoration-layer">
+                  {taskDecorations.map(item => (
+                    <div
+                      key={item.taskId}
+                      className="task-decoration-line"
+                      style={{
+                        left: `${item.left}px`,
+                        top: `${item.top}px`,
+                        height: `${item.height}px`
+                      }}
+                    />
+                  ))}
+                </div>
+
+                <div className="axis-anchor-layer">
+                  {axisAnchors.map(anchor => (
+                    <div
+                      key={anchor.dateKey}
+                      className="axis-anchor-dot"
+                      style={{
+                        left: `${anchor.left}px`,
+                        top: `${anchor.top}px`
+                      }}
+                    />
+                  ))}
+                </div>
+
+                <div
+                  ref={overlayRef}
+                  className="timeline-overlay"
+                  style={{ height: `${overlayHeight}px` }}
+                >
+                  {overlayBlocks.map(block => (
+                    <div
+                      key={block.taskId}
+                      className="axis-comment-block"
+                      style={{
+                        left: `${block.left}px`,
+                        width: `${commentBlockWidth}px`,
+                        fontSize: `${commentFontSize}px`,
+                        lineHeight: `${Math.round(commentFontSize * 1.55)}px`
+                      }}
+                      dangerouslySetInnerHTML={{ __html: block.html }}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="empty-state">
+                <div className="empty-state-icon">⌁</div>
+                <div className="empty-state-title">
+                  {!isConfigLoaded ? '正在读取配置' : configError ? '暂时无法生成进程图' : '还没有进程图'}
+                </div>
+                <div className="empty-state-description">
+                  {!isConfigLoaded
+                    ? '正在从仪表盘加载已保存的组件配置…'
+                    : configError
+                    ? configError
+                    : isConfigMode
+                    ? '在右侧选择数据表及字段，然后点击“确认并生成”。'
+                    : '请点击组件右上角的“···”，选择“配置”完成设置。'}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="side-panel">
+      {isConfigMode && <div className="side-panel">
         <div className="side-header">
-          <div className="side-title">进程图视图</div>
-          <div className="side-tabs">
-            <div className="side-tab active">基础配置</div>
-            <div className="side-tab">自定义配置</div>
-          </div>
+          <div className="side-title">进程图配置</div>
+          <div className="side-description">确认后会保存到当前仪表盘组件，并同步更新正式视图。</div>
         </div>
 
         <div className="side-body">
@@ -1747,11 +1861,23 @@ function App() {
             <div className="sub-tip"></div>
           </div>
 
-          <button className="generate-btn" onClick={handleManualRender} disabled={isRendering}>
-            {isRendering ? '生成中…' : isConfigured ? '重新生成' : '确认并生成'}
+          {configError && <div className="config-error">{configError}</div>}
+
+          <button
+            className="generate-btn"
+            onClick={handleManualRender}
+            disabled={isRendering || isSavingConfig}
+          >
+            {isSavingConfig
+              ? '正在保存…'
+              : isRendering
+              ? '生成中…'
+              : isConfigured
+              ? '确认并更新'
+              : '确认并生成'}
           </button>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
