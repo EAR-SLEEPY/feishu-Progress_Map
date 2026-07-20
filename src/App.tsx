@@ -647,9 +647,11 @@ function App() {
           timeline.on('changed', timelineHandlersRef.current.changed);
 
           redrawDecorations();
-          window.requestAnimationFrame(() => {
-            dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
-          });
+          if (!isConfigMode) {
+            window.requestAnimationFrame(() => {
+              dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
+            });
+          }
         }, 50);
 
         lastDataSignatureRef.current = currentSignature;
@@ -679,7 +681,8 @@ function App() {
       getAllRecords,
       buildDataSignature,
       isRendering,
-      recordMatchesFilters
+      recordMatchesFilters,
+      isConfigMode
     ]
   );
 
@@ -689,14 +692,14 @@ function App() {
       autoRefreshTimerRef.current = null;
     }
 
-    if (!isConfigured) return;
+    if (isConfigMode || !isConfigured) return;
     if (!selectedTableId || !titleFieldId || !dateFieldId) return;
 
     autoRefreshTimerRef.current = window.setInterval(async () => {
       if (!isPageVisibleRef.current) return;
       await renderTimeline(false);
     }, AUTO_REFRESH_MS);
-  }, [isConfigured, selectedTableId, titleFieldId, dateFieldId, renderTimeline]);
+  }, [isConfigMode, isConfigured, selectedTableId, titleFieldId, dateFieldId, renderTimeline]);
 
   const stopAutoRefresh = useCallback(() => {
     if (autoRefreshTimerRef.current) {
@@ -866,7 +869,9 @@ function App() {
     if (!isConfigLoaded) return;
 
     if (!selectedTableId || !titleFieldId || !dateFieldId) {
-      dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
+      if (!isConfigMode) {
+        dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
+      }
       return;
     }
 
@@ -874,6 +879,34 @@ function App() {
     // 这里只响应飞书下发的已保存配置版本；右侧尚未确认的草稿不会改动仪表盘视图。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedConfigVersion, isConfigLoaded]);
+
+  useEffect(() => {
+    if (!isConfigMode || !isConfigLoaded) return;
+    if (!selectedTableId || !titleFieldId || !dateFieldId) return;
+
+    const previewTimer = window.setTimeout(() => {
+      renderTimeline(true);
+    }, 250);
+
+    return () => window.clearTimeout(previewTimer);
+  }, [
+    isConfigMode,
+    isConfigLoaded,
+    selectedTableId,
+    groupFieldId,
+    titleFieldId,
+    dateFieldId,
+    filterFieldId1,
+    selectedFilterVals1,
+    filterFieldId2,
+    selectedFilterVals2,
+    commentTableId,
+    commentRelationFieldId,
+    commentTextFieldId,
+    commentDateFieldId,
+    commentFontSize,
+    commentBlockWidth
+  ]);
 
   useEffect(() => {
     const onResize = () => {
@@ -918,7 +951,7 @@ function App() {
     };
   }, [stopAutoRefresh]);
 
-  const handleManualRender = async () => {
+  const handleSaveConfig = async () => {
     if (!selectedTableId || !titleFieldId || !dateFieldId) {
       setConfigError('请先选择数据表、任务标题和日期字段。');
       return;
@@ -944,18 +977,13 @@ function App() {
     try {
       setIsSavingConfig(true);
       setConfigError('');
-      await dashboard.saveConfig({
-        dataConditions: [
-          {
-            tableId: selectedTableId,
-            groups: [],
-            series: 'COUNTA'
-          }
-        ],
+      const didSave = await dashboard.saveConfig({
+        dataConditions: [],
         customConfig: config
       });
-      await renderTimeline(true);
-      startAutoRefresh();
+      if (!didSave) {
+        throw new Error('飞书未接受本次配置，请确认当前多维表格允许编辑仪表盘。');
+      }
     } catch (err) {
       console.error('保存配置失败', err);
       setConfigError(`保存配置失败：${err instanceof Error ? err.message : String(err)}`);
@@ -996,68 +1024,33 @@ function App() {
           display: flex;
           width: 100%;
           min-height: 100vh;
-          background: #f5f6f7;
+          background: var(--bg-body, #fff);
           color: #1f2329;
           font-family: "PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+        }
+
+        .app-shell.config-mode {
+          border-top: 1px solid var(--divider, #e5e6eb);
         }
 
         .main-panel {
           flex: 1;
           min-width: 0;
-          padding: 16px;
-        }
-
-        .app-shell.view-mode .main-panel {
           padding: 0;
         }
 
         .side-panel {
-          width: 320px;
-          background: #fff;
-          border-left: 1px solid #e5e6eb;
+          width: 340px;
+          flex: none;
+          background: var(--bg-body, #fff);
+          border-left: 1px solid var(--divider, #e5e6eb);
           display: flex;
           flex-direction: column;
-          min-height: 100vh;
-        }
-
-        .side-header {
-          padding: 18px 20px 16px;
-          border-bottom: 1px solid #f0f1f3;
-        }
-
-        .side-title {
-          font-size: 17px;
-          font-weight: 600;
-          color: #1f2329;
-          margin-bottom: 6px;
-        }
-
-        .side-description {
-          color: #86909c;
-          font-size: 12px;
-          line-height: 1.55;
-        }
-
-        .side-tabs {
-          display: flex;
-          gap: 24px;
-          font-size: 14px;
-        }
-
-        .side-tab {
-          padding-bottom: 10px;
-          color: #4e5969;
-          border-bottom: 2px solid transparent;
-        }
-
-        .side-tab.active {
-          color: #3370ff;
-          border-bottom-color: #3370ff;
-          font-weight: 600;
+          height: 100vh;
         }
 
         .side-body {
-          padding: 16px 20px 28px;
+          padding: 20px;
           overflow-y: auto;
           flex: 1;
         }
@@ -1144,7 +1137,7 @@ function App() {
         }
 
         .generate-btn {
-          width: 100%;
+          min-width: 80px;
           height: 36px;
           background: #3370ff;
           color: #fff;
@@ -1153,6 +1146,20 @@ function App() {
           font-size: 14px;
           font-weight: 600;
           cursor: pointer;
+        }
+
+        .config-actions {
+          position: sticky;
+          bottom: -1px;
+          margin: 0 -20px -20px;
+          padding: 12px 20px 20px;
+          background: var(--bg-body, #fff);
+          border-top: 1px solid var(--divider, #f0f1f3);
+        }
+
+        .config-actions .generate-btn {
+          display: block;
+          margin-left: auto;
         }
 
         .generate-btn:disabled {
@@ -1173,14 +1180,9 @@ function App() {
 
         .canvas-card {
           background: #fff;
-          border: 1px solid #e5e6eb;
-          border-radius: 12px;
-          overflow: hidden;
-        }
-
-        .app-shell.view-mode .canvas-card {
           border: none;
           border-radius: 0;
+          overflow: hidden;
           min-height: 100vh;
         }
 
@@ -1225,8 +1227,9 @@ function App() {
         }
 
         .timeline-stage {
-          padding: 16px;
+          padding: 12px;
           background: #fff;
+          min-height: 100vh;
         }
 
         .empty-state {
@@ -1472,39 +1475,6 @@ function App() {
 
       <div className="main-panel">
         <div className="canvas-card">
-          <div className="canvas-toolbar">
-            <div>
-              <div className="canvas-title">进程图</div>
-
-              {(selectedFilterVals1.length > 0 || selectedFilterVals2.length > 0) && (
-                <div className="filter-badges">
-                  {selectedFilterVals1.map(v => (
-                    <span key={`f1_${v}`} className="filter-badge">
-                      条件1：{v}
-                    </span>
-                  ))}
-                  {selectedFilterVals2.map(v => (
-                    <span key={`f2_${v}`} className="filter-badge">
-                      条件2：{v}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="toolbar-status">
-              {!isConfigLoaded
-                ? '正在读取配置…'
-                : isRendering
-                ? '正在更新…'
-                : isConfigured
-                ? `已开启自动同步（每 ${AUTO_REFRESH_MS / 1000} 秒检查一次）`
-                : isConfigMode
-                ? '请在右侧完成配置'
-                : '尚未配置'}
-            </div>
-          </div>
-
           <div className="timeline-stage">
             {isConfigured ? (
               <div
@@ -1573,7 +1543,7 @@ function App() {
                     : configError
                     ? configError
                     : isConfigMode
-                    ? '在右侧选择数据表及字段，然后点击“确认并生成”。'
+                    ? '请在右侧选择数据表、任务标题和日期字段，左侧会实时预览。'
                     : '请点击组件右上角的“···”，选择“配置”完成设置。'}
                 </div>
               </div>
@@ -1583,20 +1553,7 @@ function App() {
       </div>
 
       {isConfigMode && <div className="side-panel">
-        <div className="side-header">
-          <div className="side-title">进程图配置</div>
-          <div className="side-description">确认后会保存到当前仪表盘组件，并同步更新正式视图。</div>
-        </div>
-
         <div className="side-body">
-          <div className="config-section">
-            <div className="section-title">标题</div>
-            <div className="field-row">
-              <label className="field-label">标题</label>
-              <input className="lark-input" value="进程图" readOnly />
-            </div>
-          </div>
-
           <div className="config-section">
             <div className="section-title">数据</div>
 
@@ -1605,7 +1562,17 @@ function App() {
               <select
                 className="lark-select"
                 value={selectedTableId}
-                onChange={e => setSelectedTableId(e.target.value)}
+                onChange={e => {
+                  setSelectedTableId(e.target.value);
+                  setGroupFieldId('');
+                  setTitleFieldId('');
+                  setDateFieldId('');
+                  setFilterFieldId1('');
+                  setSelectedFilterVals1([]);
+                  setFilterFieldId2('');
+                  setSelectedFilterVals2([]);
+                  setIsConfigured(false);
+                }}
               >
                 <option value="">请选择表格</option>
                 {tables.map(t => (
@@ -1675,7 +1642,10 @@ function App() {
               <select
                 className="lark-select"
                 value={filterFieldId1}
-                onChange={e => setFilterFieldId1(e.target.value)}
+                onChange={e => {
+                  setFilterFieldId1(e.target.value);
+                  setSelectedFilterVals1([]);
+                }}
               >
                 <option value="">不使用筛选</option>
                 {fields.map(f => (
@@ -1717,7 +1687,10 @@ function App() {
               <select
                 className="lark-select"
                 value={filterFieldId2}
-                onChange={e => setFilterFieldId2(e.target.value)}
+                onChange={e => {
+                  setFilterFieldId2(e.target.value);
+                  setSelectedFilterVals2([]);
+                }}
               >
                 <option value="">不使用筛选</option>
                 {fields.map(f => (
@@ -1763,7 +1736,12 @@ function App() {
               <select
                 className="lark-select"
                 value={commentTableId}
-                onChange={e => setCommentTableId(e.target.value)}
+                onChange={e => {
+                  setCommentTableId(e.target.value);
+                  setCommentRelationFieldId('');
+                  setCommentTextFieldId('');
+                  setCommentDateFieldId('');
+                }}
               >
                 <option value="">不使用评论子表</option>
                 {tables.map(t => (
@@ -1861,21 +1839,17 @@ function App() {
             <div className="sub-tip"></div>
           </div>
 
-          {configError && <div className="config-error">{configError}</div>}
+          <div className="config-actions">
+            {configError && <div className="config-error">{configError}</div>}
 
-          <button
-            className="generate-btn"
-            onClick={handleManualRender}
-            disabled={isRendering || isSavingConfig}
-          >
-            {isSavingConfig
-              ? '正在保存…'
-              : isRendering
-              ? '生成中…'
-              : isConfigured
-              ? '确认并更新'
-              : '确认并生成'}
-          </button>
+            <button
+              className="generate-btn"
+              onClick={handleSaveConfig}
+              disabled={!selectedTableId || !titleFieldId || !dateFieldId || isSavingConfig}
+            >
+              {isSavingConfig ? '保存中…' : '确定'}
+            </button>
+          </div>
         </div>
       </div>}
     </div>
