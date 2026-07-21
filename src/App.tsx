@@ -565,7 +565,8 @@ function App() {
           }
 
           const timeline = new Timeline(containerRef.current, new DataSet(timelineItems as any), {
-            height: '450px',
+            // 交给 vis-timeline 根据任务实际堆叠行数计算高度，避免少量任务时出现大块空白。
+            minHeight: '140px',
             zoomKey: 'ctrlKey',
             stack: true,
             format: {
