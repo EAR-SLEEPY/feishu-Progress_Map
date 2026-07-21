@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import {
   bitable,
   dashboard,
@@ -704,16 +704,6 @@ function App() {
             });
 
             setOverlayBlocks(blocks);
-            setOverlayHeight(
-              estimateOverlayHeight(
-                overlayTaskData.map(item => ({
-                  comments: getVisibleComments(
-                    item.comments,
-                    expandedCommentTaskIdsRef.current.has(item.taskId)
-                  )
-                }))
-              )
-            );
           };
 
           timelineHandlersRef.current.redrawDecorations = redrawDecorations;
@@ -1008,21 +998,58 @@ function App() {
     }
   }, [commentFontSize, commentBlockWidth, isConfigured]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     expandedCommentTaskIdsRef.current = expandedCommentTaskIds;
-    if (!overlayBlocks.length) return;
+    const overlay = overlayRef.current;
+    if (!overlay || !overlayBlocks.length) return;
 
-    setOverlayHeight(
-      estimateOverlayHeight(
-        overlayBlocks.map(block => ({
-          comments: getVisibleComments(
-            block.comments,
-            expandedCommentTaskIds.has(block.taskId)
-          )
-        }))
-      )
-    );
+    let frameId = 0;
+    const measureCommentCards = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        const commentBlocks = Array.from(
+          overlay.querySelectorAll('.axis-comment-block')
+        ) as HTMLElement[];
+        if (!commentBlocks.length) return;
+
+        const measuredHeight = commentBlocks.reduce((maximum, block) => {
+          const blockHeight = Math.max(block.offsetHeight, block.scrollHeight);
+          return Math.max(maximum, block.offsetTop + blockHeight + 24);
+        }, 250);
+
+        setOverlayHeight(previous =>
+          Math.abs(previous - measuredHeight) > 1 ? measuredHeight : previous
+        );
+      });
+    };
+
+    measureCommentCards();
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => measureCommentCards())
+        : null;
+    if (resizeObserver) {
+      Array.from(overlay.querySelectorAll('.axis-comment-block')).forEach(block => {
+        resizeObserver.observe(block);
+      });
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+    };
   }, [expandedCommentTaskIds, overlayBlocks, commentFontSize, commentBlockWidth]);
+
+  useEffect(() => {
+    if (!isConfigured || isConfigMode) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      dashboard.setRendered().catch(err => console.error('通知仪表盘渲染完成失败', err));
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [overlayHeight, isConfigured, isConfigMode]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
